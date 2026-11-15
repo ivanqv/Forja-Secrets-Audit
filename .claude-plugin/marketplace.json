@@ -1,0 +1,11 @@
+{
+  "name": "forja",
+  "owner": { "name": "Iván Quintas", "url": "https://iqvmedia.com" },
+  "plugins": [
+    {
+      "name": "forja-secrets-audit",
+      "source": "./",
+      "description": "Find and prevent leaked secrets in AI-assisted projects."
+    }
+  ]
+}
