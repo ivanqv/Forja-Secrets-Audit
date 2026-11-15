@@ -1,6 +1,6 @@
 ---
 name: secrets-audit
-description: Audit a project for exposed secrets and dangerous data exposure — hard-coded API keys, secrets that reach the browser bundle (NEXT_PUBLIC_/VITE_ prefixes, client components), committed .env files, tokens in MCP configs or CLAUDE.md, Supabase service_role keys, open Firebase rules, public source maps, secrets baked into Docker images and keys still alive in git history. Use when the user asks to audit security, check for leaked keys or secrets, review a project before making a repo public or deploying, or asks "am I exposing anything?".
+description: Audit a project or a live website for exposed secrets and dangerous data exposure — hard-coded API keys, secrets that reach the browser bundle (NEXT_PUBLIC_/VITE_ prefixes, client components), committed .env files, tokens in MCP configs or CLAUDE.md, Supabase service_role keys, open Firebase rules, public source maps, secrets baked into Docker images and keys still alive in git history. Also scans a live site passively (keys in public JS bundles, reachable .env/.git/backups, source maps, CORS, security headers). Use when the user asks to audit security, check for leaked keys or secrets, review a project before making a repo public or deploying, check what their website exposes, or asks "am I exposing anything?".
 ---
 
 # Secrets Audit
@@ -25,6 +25,21 @@ python3 <this-skill-dir>/scripts/scan.py <project-root> --json /tmp/forja-secret
 `<this-skill-dir>` is the folder containing this SKILL.md. The script needs only Python 3.8+ and git. It scans tracked files plus untracked-but-not-ignored files (what the next `git add` would publish) and up to 1000 commits of history. Use `--no-history` on huge repos and say so in the report.
 
 If `gitleaks` or `trufflehog` are installed (`command -v gitleaks trufflehog`), also run one of them (`gitleaks detect --no-banner --redact -r /tmp/gitleaks.json` or `trufflehog git file://. --json --no-update`) and merge new findings. Don't install them without asking.
+
+### Live website mode
+
+If the user gives a URL (their site or a client's), run:
+
+```bash
+python3 <this-skill-dir>/scripts/scan.py https://their-site.com --json /tmp/forja-web.json
+```
+
+It only does ordinary GET requests for what the site already serves: the HTML and same-site JavaScript bundles (scanned for keys), source maps, about 20 well-known sensitive paths (`/.env`, `/.git/HEAD`, SQL dumps, `wp-config` copies, backups…) validated by content so SPA catch-all pages don't produce false positives, a CORS check with a foreign `Origin` header, security headers and cookie flags.
+
+- **Before running it, make sure the site is the user's or that they have the owner's permission.** If it's clearly a third party's site, ask first.
+- Never go beyond passive checks from this skill: no login attempts, no changing IDs in URLs to read other users' data, no fuzzing. Those belong to a contracted, authorised pentest.
+- If the site and its repo are both available, run both modes: the repo shows the cause, the live scan proves what is actually public.
+- If the scan exits with code 2 (connection error, HTTP 4xx/5xx, anti-bot protection), say so; don't report the site as clean.
 
 ## Step 2 — Review what a regex can't see
 

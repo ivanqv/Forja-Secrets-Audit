@@ -1,8 +1,8 @@
 # Forja Secrets Audit
 
-**Find and stop leaked secrets in AI-assisted projects.** A Claude Code plugin with two parts:
+**Find and stop leaked secrets in AI-assisted projects — in the repo and on the live site.** A Claude Code plugin with two parts:
 
-- 🔍 **`secrets-audit` skill** — audits a project and explains, in plain language, what you are exposing and how to fix it in the right order.
+- 🔍 **`secrets-audit` skill** — audits a project (or a live URL) and explains, in plain language, what you are exposing and how to fix it in the right order.
 - 🔒 **Secrets Guard hook** — blocks Claude *before* it writes an API key into your code, creates a `.env` that git would commit, or commits staged secrets.
 
 Part of the **Forja** toolkit by [IQV Media](https://iqvmedia.com).
@@ -42,7 +42,25 @@ Requirements: Python 3.8+ and git. No dependencies.
 python3 skills/secrets-audit/scripts/scan.py /path/to/project --md report.md --json report.json
 ```
 
-Exit code `1` when there are critical/high findings, so it works in CI or as a pre-commit check. Use `--no-history` to skip the git history scan.
+Exit code `1` when there are critical/high findings, `2` on errors, so it works in CI or as a pre-commit check. Use `--no-history` to skip the git history scan.
+
+## Scan a live website
+
+```bash
+python3 skills/secrets-audit/scripts/scan.py https://your-site.com --md web-report.md
+```
+
+Or just ask Claude: *"check what my-site.com is exposing"*. **Passive only** — ordinary GET requests for what the site already serves to any visitor:
+
+- API keys and Supabase `service_role` keys inside the public JavaScript bundles and inline scripts
+- Public source maps
+- Reachable sensitive files: `.env*`, `.git`, SQL dumps, `wp-config.php` copies, backups, `.htpasswd`, `.npmrc`, `docker-compose.yml`, `phpinfo`… (validated by content, so SPA catch-all pages don't cause false positives)
+- CORS that reflects any origin with credentials
+- Missing security headers, version disclosure, session cookies without `Secure`/`HttpOnly`/`SameSite`
+
+Not covered (by design): login brute force, IDOR/ID tampering, dependency CVEs. Those need an authorised pentest.
+
+> ⚠️ Scan your own sites or sites you have the owner's permission to test.
 
 ## The Guard hook
 

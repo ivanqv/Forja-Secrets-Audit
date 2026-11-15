@@ -8,6 +8,7 @@ in git history.
 
 Usage:
     python3 scan.py [PATH] [--md report.md] [--json report.json] [--no-history] [--max-commits N]
+    python3 scan.py https://your-site.com [--md report.md]      (passive live-site mode, see url_scan.py)
 
 Exit code: 0 = nothing critical/high, 1 = critical or high findings, 2 = error.
 Standard library only. Secrets are always redacted in the output.
@@ -305,6 +306,9 @@ def to_markdown(root: Path, findings: list[Finding], git: bool, history: bool) -
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and re.match(r"https?://", sys.argv[1]):
+        from url_scan import main as url_main  # live website mode
+        return url_main(sys.argv[1:])
     ap = argparse.ArgumentParser(description="Forja Secrets Audit scanner")
     ap.add_argument("path", nargs="?", default=".")
     ap.add_argument("--md", help="write Markdown report to this file")

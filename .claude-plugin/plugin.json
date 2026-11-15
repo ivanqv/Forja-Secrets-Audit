@@ -1,10 +1,22 @@
 {
   "name": "forja-secrets-audit",
-  "version": "0.1.0",
-  "description": "Audit projects for exposed secrets (API keys in the frontend, committed .env files, tokens in MCP/CLAUDE.md, git history) and block new leaks before Claude writes or commits them.",
-  "author": { "name": "Iván Quintas", "url": "https://iqvmedia.com" },
+  "version": "0.2.0",
+  "description": "Audit projects and live websites for exposed secrets (API keys in the frontend, committed .env files, tokens in MCP/CLAUDE.md, git history, reachable .env/.git) and block new leaks before Claude writes or commits them.",
+  "author": {
+    "name": "Iván Quintas",
+    "url": "https://iqvmedia.com"
+  },
   "homepage": "https://github.com/ivanqv/Forja-Secrets-Audit",
   "repository": "https://github.com/ivanqv/Forja-Secrets-Audit",
   "license": "MIT",
-  "keywords": ["security", "secrets", "api-keys", "audit", "env", "supabase", "nextjs", "mcp"]
+  "keywords": [
+    "security",
+    "secrets",
+    "api-keys",
+    "audit",
+    "env",
+    "supabase",
+    "nextjs",
+    "mcp"
+  ]
 }
