@@ -1,6 +1,10 @@
 {
   "name": "forja",
-  "owner": { "name": "Iván Quintas", "url": "https://iqvmedia.com" },
+  "description": "Forja: developer tooling by IQV Media for safer, AI-assisted web projects.",
+  "owner": {
+    "name": "Iván Quintas",
+    "url": "https://iqvmedia.com"
+  },
   "plugins": [
     {
       "name": "forja-secrets-audit",
