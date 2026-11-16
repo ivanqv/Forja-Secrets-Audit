@@ -1,0 +1,92 @@
+From fc146e0b2abe0dbe4c90d469091d090a677ccd51 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Iv=C3=A1n=20Quintas?= <noreply@iqvmedia.com>
+Date: Mon, 16 Nov 2026 12:56:07 +0100
+Subject: [PATCH] v0.3.1: standalone skill package support (requirements,
+ portable guard hook, hook setup guide)
+
+---
+ .claude-plugin/plugin.json                    |  2 +-
+ hooks/guard.py                                |  7 +++++-
+ skills/secrets-audit/SKILL.md                 |  4 +++-
+ skills/secrets-audit/references/GUARD-HOOK.md | 24 +++++++++++++++++++
+ 4 files changed, 34 insertions(+), 3 deletions(-)
+ create mode 100644 skills/secrets-audit/references/GUARD-HOOK.md
+
+diff --git a/.claude-plugin/plugin.json b/.claude-plugin/plugin.json
+index f5307eb..821e8d5 100644
+--- a/.claude-plugin/plugin.json
++++ b/.claude-plugin/plugin.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "forja-secrets-audit",
+-  "version": "0.3.0",
++  "version": "0.3.1",
+   "description": "Audit projects and live websites for exposed secrets (API keys in the frontend, committed .env files, tokens in MCP/CLAUDE.md, git history, reachable .env/.git) and block new leaks before Claude writes or commits them.",
+   "author": {
+     "name": "Iván Quintas",
+diff --git a/hooks/guard.py b/hooks/guard.py
+index 447e206..2241efb 100755
+--- a/hooks/guard.py
++++ b/hooks/guard.py
+@@ -18,7 +18,12 @@ import subprocess
+ import sys
+ from pathlib import Path
+ 
+-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skills" / "secrets-audit" / "scripts"))
++_here = Path(__file__).resolve().parent
++for _cand in (_here.parent / "skills" / "secrets-audit" / "scripts",  # plugin layout
++              _here.parent / "scripts"):                              # standalone skill folder
++    if (_cand / "rules.py").exists():
++        sys.path.insert(0, str(_cand))
++        break
+ from rules import scan_text  # noqa: E402
+ 
+ ENV_NAME_RE = re.compile(r"(^|/)\.env(\.[\w.-]+)?$")
+diff --git a/skills/secrets-audit/SKILL.md b/skills/secrets-audit/SKILL.md
+index f06a2f3..bfff202 100644
+--- a/skills/secrets-audit/SKILL.md
++++ b/skills/secrets-audit/SKILL.md
+@@ -7,7 +7,9 @@ description: Audit a project or a live website for exposed secrets and dangerous
+ 
+ Find what a project is leaking before someone else does, prove each finding, explain it in plain language and fix it in the right order. Typical cause: code written fast (often with AI help) where keys end up in the frontend, in a committed `.env`, or in a config file nobody thinks of.
+ 
+-`<skill>` below is the folder containing this SKILL.md. Scripts need only Python 3.8+ and git.
++`<skill>` below is the folder containing this SKILL.md.
++
++**Requirements:** the scripts run locally on the user's machine and need **Python 3.8+** and **git** (no other dependencies). Check with `python3 --version && git --version` before Step 2; if Python is missing, tell the user and fall back to the manual review in Step 3 only, saying the automated scan was skipped. Optional: the *Secrets Guard* hook for Claude Code, which blocks secrets before they are written or committed — setup in [`references/GUARD-HOOK.md`](references/GUARD-HOOK.md). Full plugin and source: https://github.com/ivanqv/Forja-Secrets-Audit
+ 
+ ## Ground rules
+ 
+diff --git a/skills/secrets-audit/references/GUARD-HOOK.md b/skills/secrets-audit/references/GUARD-HOOK.md
+new file mode 100644
+index 0000000..719547e
+--- /dev/null
++++ b/skills/secrets-audit/references/GUARD-HOOK.md
+@@ -0,0 +1,24 @@
++# Secrets Guard hook (optional, Claude Code)
++
++Blocks, before they happen: writing an API key into a source file, writing a `.env` that git would commit, `git add` of `.env` files, and `git commit` with secrets in the staged diff. Add `forja-allow` in a comment on a line to let a deliberate fake value through.
++
++**If you installed the full plugin** (`/plugin marketplace add ivanqv/Forja-Secrets-Audit`), the hook is already on. Nothing to do.
++
++**If you only have this skill folder**, add the hook to `~/.claude/settings.json` (all projects) or `.claude/settings.json` (one project), replacing `<skill>` with the absolute path of this skill folder:
++
++```json
++{
++  "hooks": {
++    "PreToolUse": [
++      {
++        "matcher": "Write|Edit|MultiEdit|Bash",
++        "hooks": [
++          { "type": "command", "command": "python3 \"<skill>/hooks/guard.py\"", "timeout": 30 }
++        ]
++      }
++    ]
++  }
++}
++```
++
++Only edit the settings file with the user's explicit permission, and merge with any existing `hooks` section instead of replacing it. Restart Claude Code (or run `/hooks`) to load it.
+-- 
+2.43.0
+
