@@ -18,7 +18,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skills" / "secrets-audit" / "scripts"))
+_here = Path(__file__).resolve().parent
+for _cand in (_here.parent / "skills" / "secrets-audit" / "scripts",  # plugin layout
+              _here.parent / "scripts"):                              # standalone skill folder
+    if (_cand / "rules.py").exists():
+        sys.path.insert(0, str(_cand))
+        break
 from rules import scan_text  # noqa: E402
 
 ENV_NAME_RE = re.compile(r"(^|/)\.env(\.[\w.-]+)?$")

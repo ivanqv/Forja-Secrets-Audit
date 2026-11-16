@@ -7,7 +7,9 @@ description: Audit a project or a live website for exposed secrets and dangerous
 
 Find what a project is leaking before someone else does, prove each finding, explain it in plain language and fix it in the right order. Typical cause: code written fast (often with AI help) where keys end up in the frontend, in a committed `.env`, or in a config file nobody thinks of.
 
-`<skill>` below is the folder containing this SKILL.md. Scripts need only Python 3.8+ and git.
+`<skill>` below is the folder containing this SKILL.md.
+
+**Requirements:** the scripts run locally on the user's machine and need **Python 3.8+** and **git** (no other dependencies). Check with `python3 --version && git --version` before Step 2; if Python is missing, tell the user and fall back to the manual review in Step 3 only, saying the automated scan was skipped. Optional: the *Secrets Guard* hook for Claude Code, which blocks secrets before they are written or committed — setup in [`references/GUARD-HOOK.md`](references/GUARD-HOOK.md). Full plugin and source: https://github.com/ivanqv/Forja-Secrets-Audit
 
 ## Ground rules
 
