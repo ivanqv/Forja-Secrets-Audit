@@ -92,7 +92,7 @@ Runs on every `Write`, `Edit`, `MultiEdit` and `Bash` call:
 | `git commit` with secrets in the staged diff | ❌ Blocked |
 | Anything else | ✅ Allowed |
 
-Need a fake key in a test fixture? Add `forja-allow` in a comment on that line. The hook fails open on unexpected errors so it never breaks your session.
+Need a fake key in a test fixture? Add `forja-allow` in a comment on that line. Messages are in English, or Spanish when the system language is Spanish (override with `FORJA_LANG=en|es`). The hook fails open on unexpected errors so it never breaks your session.
 
 ## Try it on the demo
 

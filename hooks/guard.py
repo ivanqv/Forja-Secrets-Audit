@@ -26,6 +26,30 @@ for _cand in (_here.parent / "skills" / "secrets-audit" / "scripts",  # plugin l
         break
 from rules import scan_text  # noqa: E402
 
+import os
+
+LANG_ES = (os.environ.get("FORJA_LANG") or os.environ.get("LC_ALL") or os.environ.get("LANG") or "").lower().startswith("es")
+
+MSG = {
+    "secret": ("se ha bloqueado escribir un secreto ({kinds}) en {where} (línea {lines}). No pongas credenciales en el código: léelas de una variable de entorno de servidor (p. ej. process.env.X) y guarda el valor solo en un .env ignorado por git. Si es un dato de prueba falso, añade el comentario 'forja-allow' en esa línea.",
+               "blocked writing a secret ({kinds}) to {where} (line {lines}). Don't put credentials in code: read them from a server-side environment variable (e.g. process.env.X) and keep the value only in a git-ignored .env. If it's a fake test value, add the comment 'forja-allow' on that line."),
+    "env_unignored": ("vas a escribir {name} pero git no lo ignora, así que acabaría en el repositorio. Añade primero '.env', '.env.*' y '!.env.example' a .gitignore.",
+                      "you're about to write {name} but git doesn't ignore it, so it would end up in the repository. Add '.env', '.env.*' and '!.env.example' to .gitignore first."),
+    "add_env": ("'git add' incluye {files}. Los .env no se versionan: usa .env.example con valores de ejemplo.",
+                "'git add' includes {files}. .env files must not be committed: use a .env.example with placeholder values."),
+    "add_all": ("'git add' masivo añadiría {files}. Añádelos a .gitignore antes.",
+                "a bulk 'git add' would add {files}. Add them to .gitignore first."),
+    "commit_env": ("hay archivos .env preparados para commit: {files}. Sácalos con 'git restore --staged <archivo>' y añádelos a .gitignore.",
+                   "there are .env files staged for commit: {files}. Unstage them with 'git restore --staged <file>' and add them to .gitignore."),
+    "staged": ("los cambios preparados para commit", "the staged changes"),
+    "file": ("el archivo", "the file"),
+}
+
+
+def t(key: str, **kw) -> str:
+    return MSG[key][0 if LANG_ES else 1].format(**kw)
+
+
 ENV_NAME_RE = re.compile(r"(^|/)\.env(\.[\w.-]+)?$")
 ENV_TEMPLATE_RE = re.compile(r"\.(example|sample|template|dist|defaults?)$", re.I)
 
@@ -60,10 +84,7 @@ def check_content(content: str, where: str) -> None:
     if hits:
         kinds = ", ".join(sorted({h[1] for h in hits}))
         lines = ", ".join(str(h[3]) for h in hits[:5])
-        block(f"se ha bloqueado escribir un secreto ({kinds}) en {where} (línea {lines}). "
-              "No pongas credenciales en el código: léelas de una variable de entorno de servidor "
-              "(p. ej. process.env.X) y guarda el valor solo en un .env ignorado por git. "
-              "Si es un dato de prueba falso, añade el comentario 'forja-allow' en esa línea.")
+        block(t("secret", kinds=kinds, where=where, lines=lines))
 
 
 def handle_write(tool: str, ti: dict, cwd: str) -> None:
@@ -77,10 +98,9 @@ def handle_write(tool: str, ti: dict, cwd: str) -> None:
 
     if is_real_env(path):
         if in_git(cwd) and not ignored(path, cwd):
-            block(f"vas a escribir {Path(path).name} pero git no lo ignora, así que acabaría en el repositorio. "
-                  "Añade primero '.env', '.env.*' y '!.env.example' a .gitignore.")
+            block(t("env_unignored", name=Path(path).name))
         return  # secrets in an ignored .env are the right place
-    check_content(content, Path(path).name or "el archivo")
+    check_content(content, Path(path).name or t("file"))
 
 
 def handle_bash(cmd: str, cwd: str) -> None:
@@ -91,23 +111,22 @@ def handle_bash(cmd: str, cwd: str) -> None:
         args = m.group(1).split()
         explicit_env = [a for a in args if is_real_env(a)]
         if explicit_env:
-            block(f"'git add' incluye {', '.join(explicit_env)}. Los .env no se versionan: usa .env.example con valores de ejemplo.")
+            block(t("add_env", files=", ".join(explicit_env)))
         if any(a in (".", "-A", "--all", "-u") or a.endswith("/") for a in args):
             status = git(["status", "--porcelain", "--untracked-files=all"], cwd).stdout
             pending = [ln[3:] for ln in status.splitlines() if is_real_env(ln[3:].strip('"'))]
             if pending:
-                block(f"'git add' masivo añadiría {', '.join(pending)}. Añádelos a .gitignore antes.")
+                block(t("add_all", files=", ".join(pending)))
     # git commit: scan what is staged
     if re.search(r"\bgit\s+commit\b", cmd):
         staged = git(["diff", "--cached", "--name-only"], cwd).stdout.split()
         env_staged = [f for f in staged if is_real_env(f)]
         if env_staged:
-            block(f"hay archivos .env preparados para commit: {', '.join(env_staged)}. "
-                  "Sácalos con 'git restore --staged <archivo>' y añádelos a .gitignore.")
+            block(t("commit_env", files=", ".join(env_staged)))
         diff = git(["diff", "--cached", "-U0", "--no-color"], cwd).stdout
         added = "\n".join(ln[1:] for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
         if added:
-            check_content(added, "los cambios preparados para commit")
+            check_content(added, t("staged"))
 
 
 def main() -> None:
