@@ -50,7 +50,7 @@ PROVIDER_RULES: list[Rule] = [
          _r(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----"), "critical"),
     Rule("db-url-password", "URL de base de datos con contraseña",
          _r(r"\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?)://[^:\s/'\"@]+:([^@\s/'\"]{3,})@[^\s'\"]+"),
-         "high", 1),
+         "critical", 1),
 ]
 
 JWT_RE = _r(r"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")

@@ -31,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rules import SEVERITY_ORDER, scan_text  # noqa: E402
 from scan import Finding  # noqa: E402
+from triage import EXPOSURE_LABEL, IMPACT_FROM_BASE, baseline_markdown, compare, finalize, load_baseline  # noqa: E402
 
 UA = "ForjaSecretsAudit/0.2 (+https://github.com/ivanqv/Forja-Secrets-Audit)"
 MAX_BODY = 6_000_000
@@ -178,10 +179,10 @@ def scan_url(url: str, max_scripts: int = 40, insecure: bool = False) -> tuple[l
 
     def check_js(text: str, where: str):
         for rid, rname, sev, ln, ev in scan_text(text, generic=False):
-            out.append(Finding("critical" if sev in ("critical", "high") else sev, rid, f"{rname} en código público", where, ln, ev,
+            out.append(Finding(sev, rid, f"{rname} en código público", where, ln, ev,
                                detail="Este código lo descarga cualquier visitante: la clave es pública.",
                                fix="Rota la clave ya y mueve la llamada a un endpoint de servidor. Revisa variables con prefijo público (NEXT_PUBLIC_, VITE_…).",
-                               tags=["client", "live"]))
+                               tags=["client", "live"], impact=IMPACT_FROM_BASE[sev], exposure="publico"))
 
     for i, code in enumerate(inline):
         check_js(code, f"{final} (script inline #{i + 1})")
@@ -214,27 +215,30 @@ def scan_url(url: str, max_scripts: int = 40, insecure: bool = False) -> tuple[l
                                tags=["live"]))
 
     uniq = {(x.rule, x.file, x.line, x.evidence): x for x in out}
+    finalize(list(uniq.values()))
     findings = sorted(uniq.values(), key=lambda x: (SEVERITY_ORDER[x.severity], x.file))
     meta = {"url": final, "scripts_found": len(scripts), "scripts_scanned": scanned,
             "inline_scripts": len(inline), "requests": f.requests}
     return findings, meta
 
 
-def to_markdown(findings: list[Finding], meta: dict) -> str:
+def to_markdown(findings: list[Finding], meta: dict, diff: dict | None = None) -> str:
     icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🔵", "info": "⚪"}
     counts = {s: sum(1 for x in findings if x.severity == s) for s in SEVERITY_ORDER}
     lines = [f"# Forja Secrets Audit — {meta['url']}", "",
              f"- Modo: web publicada (pasivo) · Scripts analizados: {meta['scripts_scanned']} + {meta['inline_scripts']} inline · Peticiones: {meta['requests']}",
              ("- Resumen: " + " · ".join(f"{icon[s]} {s}: {n}" for s, n in counts.items() if n)) if findings else "- Sin hallazgos.",
-             "- No cubre: lógica de la aplicación (IDOR), fuerza bruta en login ni CVE de dependencias.", ""]
+             "- No cubre: lógica de la aplicación (IDOR), fuerza bruta en login ni CVE de dependencias.", ""] + baseline_markdown(diff)
     for sev in SEVERITY_ORDER:
         group = [x for x in findings if x.severity == sev]
         if not group:
             continue
         lines += [f"## {icon[sev]} {sev.upper()} ({len(group)})", ""]
         for x in group:
-            lines.append(f"### {x.title}")
-            lines.append(f"- **Dónde:** `{x.file}`" + (f":{x.line}" if x.line else "") + (f" · **Valor:** `{x.evidence}`" if x.evidence else ""))
+            lines.append(f"### {x.title}" + (" 🆕" if x.status == "nuevo" else ""))
+            lines.append(f"- **Dónde:** `{x.file}`" + (f":{x.line}" if x.line else "") + (f" · **Valor:** `{x.evidence}`" if x.evidence else "") + f" · **ID:** `{x.id}`")
+            if x.impact and x.exposure:
+                lines.append(f"- **Impacto:** {x.impact} · **Exposición:** {EXPOSURE_LABEL[x.exposure]}")
             if x.detail:
                 lines.append(f"- **Por qué importa:** {x.detail}")
             if x.fix:
@@ -250,9 +254,12 @@ def main(argv=None) -> int:
     ap.add_argument("--json")
     ap.add_argument("--max-scripts", type=int, default=40)
     ap.add_argument("--insecure", action="store_true", help="don't verify TLS certificates")
+    ap.add_argument("--baseline", help="JSON from a previous run of this site")
     a = ap.parse_args(argv)
     findings, meta = scan_url(a.url, a.max_scripts, a.insecure)
-    md = to_markdown(findings, meta)
+    diff = compare(findings, load_baseline(a.baseline)) if a.baseline and Path(a.baseline).exists() else None
+    meta["mode"], meta["baseline"] = "url", diff
+    md = to_markdown(findings, meta, diff)
     if a.md:
         Path(a.md).write_text(md, encoding="utf-8")
     if a.json:

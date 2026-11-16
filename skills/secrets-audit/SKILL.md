@@ -1,77 +1,119 @@
 ---
 name: secrets-audit
-description: Audit a project or a live website for exposed secrets and dangerous data exposure — hard-coded API keys, secrets that reach the browser bundle (NEXT_PUBLIC_/VITE_ prefixes, client components), committed .env files, tokens in MCP configs or CLAUDE.md, Supabase service_role keys, open Firebase rules, public source maps, secrets baked into Docker images and keys still alive in git history. Also scans a live site passively (keys in public JS bundles, reachable .env/.git/backups, source maps, CORS, security headers). Use when the user asks to audit security, check for leaked keys or secrets, review a project before making a repo public or deploying, check what their website exposes, or asks "am I exposing anything?".
+description: Audit a project or a live website for exposed secrets and dangerous data exposure — hard-coded API keys, secrets that reach the browser bundle (NEXT_PUBLIC_/VITE_ prefixes, client components), committed .env files, tokens in MCP configs or CLAUDE.md, Supabase service_role keys, open Firebase rules, public source maps, secrets baked into Docker images and keys still alive in git history. Also scans a live site passively (keys in public JS bundles, reachable .env/.git/backups, source maps, CORS, security headers). Every finding is verified before it is reported. Use when the user asks to audit security, check for leaked keys or secrets, review a project before making a repo public or deploying, check what their website exposes, or asks "am I exposing anything?".
 ---
 
 # Secrets Audit
 
-Find what a project is leaking before someone else does, explain it in plain language and fix it in the right order. Typical cause: code written fast (often with AI help) where keys end up in the frontend, in a committed `.env`, or in a config file nobody thinks of.
+Find what a project is leaking before someone else does, prove each finding, explain it in plain language and fix it in the right order. Typical cause: code written fast (often with AI help) where keys end up in the frontend, in a committed `.env`, or in a config file nobody thinks of.
+
+`<skill>` below is the folder containing this SKILL.md. Scripts need only Python 3.8+ and git.
 
 ## Ground rules
 
-- **Never print a full secret.** Not in chat, not in reports, not in commit messages. Use the redacted form the scanner gives (`sk-ant…xY (108 chars)`).
+- **Never print a full secret.** Not in chat, reports, commit messages or subagent briefs. Use the redacted form the scanner gives (`sk-ant…xY (108 chars)`). `validate_findings.py` rejects files containing unredacted secrets.
 - **Never test whether a key works** by calling the provider's API. Assume any exposed key is compromised.
-- **Don't change anything until the user agrees.** Audit first, then propose fixes; apply them only with an explicit yes. Never rewrite git history or force-push without explicit confirmation.
+- **Don't change anything until the user agrees.** Audit first, then propose fixes. Never rewrite git history or force-push without explicit confirmation.
+- **A finding is reported only after it has a verdict** (Step 4). The scanner produces *candidates*, not conclusions.
 - Answer in the user's language.
 
-## Step 1 — Run the scanner
+## Modes
 
-From the project root (default: the current working directory):
+- **Full audit** — the user asks to audit a project or site. Run every step and produce the report.
+- **Quick question** — e.g. "is this key safe in this file?". Answer directly from the code; run the scanner only if it helps. No report files unless asked.
 
-```bash
-python3 <this-skill-dir>/scripts/scan.py <project-root> --json /tmp/forja-secrets.json
+## Step 1 — Set up the run
+
+Keep audit files **outside the project** so they are never committed:
+
+```
+~/.forja/secrets-audit/<project-or-host>/run-<N>/
+    candidates.json   # scanner output
+    findings.json     # verified findings (Step 4)
+    SECURITY-AUDIT.md # final report (Step 5)
 ```
 
-`<this-skill-dir>` is the folder containing this SKILL.md. The script needs only Python 3.8+ and git. It scans tracked files plus untracked-but-not-ignored files (what the next `git add` would publish) and up to 1000 commits of history. Use `--no-history` on huge repos and say so in the report.
+`<N>` is one more than the highest existing run. If a previous run's `findings.json` exists, it is the **baseline** for this run.
 
-If `gitleaks` or `trufflehog` are installed (`command -v gitleaks trufflehog`), also run one of them (`gitleaks detect --no-banner --redact -r /tmp/gitleaks.json` or `trufflehog git file://. --json --no-update`) and merge new findings. Don't install them without asking.
+Ask (or infer from `git remote -v` and what the user said) whether the repo is **public or private**; if unknown, leave it as `unknown`, which is treated as public.
 
-### Live website mode
+## Step 2 — Run the scanner
 
-If the user gives a URL (their site or a client's), run:
+Repository:
 
 ```bash
-python3 <this-skill-dir>/scripts/scan.py https://their-site.com --json /tmp/forja-web.json
+python3 <skill>/scripts/scan.py <project-root> --repo-visibility <public|private|unknown> \
+  --json <run>/candidates.json [--baseline <previous-run>/findings.json]
 ```
 
-It only does ordinary GET requests for what the site already serves: the HTML and same-site JavaScript bundles (scanned for keys), source maps, about 20 well-known sensitive paths (`/.env`, `/.git/HEAD`, SQL dumps, `wp-config` copies, backups…) validated by content so SPA catch-all pages don't produce false positives, a CORS check with a foreign `Origin` header, security headers and cookie flags.
+It scans tracked files plus untracked-but-not-ignored files (what the next `git add` would publish) and up to 1000 commits of history (`--no-history` on huge repos — say so in the report).
 
-- **Before running it, make sure the site is the user's or that they have the owner's permission.** If it's clearly a third party's site, ask first.
-- Never go beyond passive checks from this skill: no login attempts, no changing IDs in URLs to read other users' data, no fuzzing. Those belong to a contracted, authorised pentest.
-- If the site and its repo are both available, run both modes: the repo shows the cause, the live scan proves what is actually public.
-- If the scan exits with code 2 (connection error, HTTP 4xx/5xx, anti-bot protection), say so; don't report the site as clean.
+Live website (only the user's own site or one they have permission to test — ask if it's clearly a third party's):
 
-## Step 2 — Review what a regex can't see
+```bash
+python3 <skill>/scripts/scan.py https://their-site.com --json <run>/candidates.json [--baseline …]
+```
 
-Read the scanner output, then check by hand. Identify the framework first (package.json, config files) — it decides what reaches the browser.
+Passive only: ordinary GET requests for what the site already serves (HTML and same-site JS bundles, source maps, ~20 well-known sensitive paths validated by content, a CORS check, headers and cookies). Never attempt logins, change IDs in URLs to read other users' data, or fuzz — that is an authorised pentest, not this skill. Exit code 2 means the site couldn't be analysed (connection error, HTTP 4xx/5xx, anti-bot): say so, never report it as clean. If both the repo and the site are available, run both — the repo shows the cause, the site proves what is actually public.
 
-1. **What actually ships to the client.** For each secret found in code, follow the imports: is that module used by a client component, a page, or a browser bundle? In Next.js: `'use client'` files and everything they import; anything under `pages/` that isn't `pages/api/`. In Vite/Astro/SvelteKit/Nuxt: files under `src/` outside server routes, plus `import.meta.env.VITE_*` / `PUBLIC_*`. Upgrade or downgrade the scanner's verdict with that evidence.
-2. **Proxying.** Calls to OpenAI/Anthropic/Stripe/etc. must happen server-side. Flag any `fetch` to a paid API from browser code, and `dangerouslyAllowBrowser: true`.
-3. **Supabase.** `service_role` anywhere outside server code is critical. Check migrations/SQL for tables without `enable row level security`, and storage buckets created as `public`.
-4. **Firebase.** Rules files with `if true` or no auth checks.
-5. **Deploy and build config.** `productionBrowserSourceMaps`, `build.sourcemap`, `.dockerignore` missing `.env`, `COPY . .` before secrets are excluded, `.git` folder served from a public dir.
-6. **CI.** GitHub Actions that `echo` secrets, write them to artifacts, or use `pull_request_target` with checkout of PR code.
-7. **AI-tool files.** `CLAUDE.md`, `AGENTS.md`, `.cursorrules`, prompts, `.mcp.json`, `.claude/settings*.json`, n8n exports: any credential there is versioned and also sent to the model.
-8. **Logs and errors.** Code that logs request headers, full env objects (`console.log(process.env)`), or returns stack traces/env in API error responses.
-9. **False positives.** Drop findings that are clearly fake (test fixtures, docs examples, public-by-design keys such as Stripe publishable keys, Supabase anon keys, Firebase web config, reCAPTCHA site keys). When unsure, keep it as "revisar" rather than deleting it.
+If `gitleaks` or `trufflehog` are installed (`command -v gitleaks trufflehog`), also run one with redaction on and add any new candidates. Don't install them without asking.
 
-## Step 3 — Report
+**How severity is computed.** Severity is *impact × exposure*, not a checklist: impact is what an attacker gets (`alto` = paid API, payments, database, full repo or cloud access; `medio` = limited or scoped access; `bajo` = little or no direct gain) and exposure is who can reach it (`publico` → `repo` → `pendiente` → `local` → `test`). A private repo lowers repo-level severities by one step. Each candidate shows both, so you can adjust them with evidence.
 
-Lead with a two-line verdict (is anything critical exposed right now?). Then a table: severity · what · where (file:line) · fix. Group by severity:
+With a baseline, each candidate is marked `nuevo` or `persiste`, carries the `previous_verdict`, and the run lists what was fixed. Focus effort on new candidates and on persisting ones whose file changed; a previously `rejected` candidate in an unchanged file can keep its verdict (say so in its reason).
 
-- **Critical:** a live-looking secret that is public or would be public (browser bundle, committed file in a repo that is or may become public, git history, service_role, private key).
-- **High:** secret committed to a private repo, secrets in Docker images or MCP/AI config, open database rules.
-- **Medium/Low:** hygiene — missing `.gitignore` entries, public source maps, test-key leaks, missing `.dockerignore`.
+## Step 3 — Look for what a regex can't see
 
-For every exposed secret, the fix order is always:
+Identify the framework first (package.json, config files) — it decides what reaches the browser. Then check by hand and add candidates for anything new:
 
-1. **Rotate** the key in the provider's dashboard (revoke the old one). Removing it from code does not un-leak it.
+1. **What ships to the client.** Follow imports from each secret: is the module used by a client component, a page or a browser bundle? Next.js: `'use client'` files and everything they import; `pages/` outside `pages/api/`. Vite/Astro/SvelteKit/Nuxt: `src/` outside server routes, `import.meta.env.VITE_*` / `PUBLIC_*`.
+2. **Proxying.** Calls to paid APIs (OpenAI, Anthropic, Stripe…) must be server-side. Flag `fetch` to them from browser code and `dangerouslyAllowBrowser: true`.
+3. **Supabase.** `service_role` outside server code; tables without row level security in migrations; storage buckets created `public`.
+4. **Firebase.** Rules with `if true` or no auth checks.
+5. **Build and deploy.** `productionBrowserSourceMaps`, `build.sourcemap`, `.dockerignore` missing `.env`, `COPY . .` before secrets are excluded, `.git` served from a public folder.
+6. **CI.** Workflows that `echo` secrets, upload them as artifacts, or use `pull_request_target` with checkout of PR code.
+7. **AI-tool files.** `CLAUDE.md`, `AGENTS.md`, `.cursorrules`, prompts, `.mcp.json`, `.claude/settings*.json`, n8n exports — versioned *and* sent to the model.
+8. **Logs and errors.** Logging request headers or `process.env`, stack traces or env values in API error responses.
+
+## Step 4 — Verify every candidate
+
+Each candidate ends with exactly one verdict, written into `findings.json` (a copy of `candidates.json` with these fields filled):
+
+| Verdict | Meaning | Required fields |
+|---|---|---|
+| `confirmed` | Proven from the source: you can point to where the secret lives and how it is reachable | `severity`, `trace` |
+| `needs_validation` | One exact fact is still unknown (e.g. "is this AWS key ID paired with a secret anywhere?") | `open_question`; `severity` empty |
+| `rejected` | Disproved: fake/test value, public-by-design key, unreachable code… | `rejection_reason` |
+
+**The agent that verifies a finding is never the one that found it.** For every `critical`/`high` candidate (and any you're unsure about), hand it to a **fresh subagent** whose job is to *disprove* it, using the brief in [`references/VERIFICATION.md`](references/VERIFICATION.md). Group candidates by file to keep it to a handful of subagents; run them in parallel when the environment allows. Medium and lower candidates can be verified by you directly. If subagents aren't available, do a separate, explicit "try to disprove" pass per candidate and note in the report that verification was not independent.
+
+Rules for the verdict:
+
+- **Severity needs impact.** Confirm the impact × exposure the scanner proposed, or change it with a reason in `trace`.
+- **Defense in depth is not a vulnerability.** If one layer already blocks the attack (e.g. the key is server-only and the missing piece is a `.dockerignore`), confirm it with `severity: "info"` and add the tag `hardening`.
+- **Public-by-design values are rejected**, not downgraded: Stripe publishable keys, Supabase anon keys, Firebase web config, reCAPTCHA site keys, Google Maps browser keys restricted by referrer.
+
+Then validate — fix and re-run until it passes:
+
+```bash
+python3 <skill>/scripts/validate_findings.py <run>/findings.json
+```
+
+## Step 5 — Report
+
+```bash
+python3 <skill>/scripts/render_report.py <run>/findings.json --out <run>/SECURITY-AUDIT.md
+```
+
+In chat, give the verdict in two lines (is anything critical exposed right now?), the rotation checklist and the top fixes; point to the report file for the rest. Offer to copy the report into the project (it only contains redacted values).
+
+For every exposed secret the fix order is always:
+
+1. **Rotate** the key in the provider's dashboard. Removing it from code does not un-leak it.
 2. **Move** it to a server-only environment variable; if the browser needs the feature, add a server endpoint that calls the provider.
-3. **Clean** the repo: `git rm --cached` for committed env files, `.gitignore`/`.dockerignore` entries, and — only after rotating, and only if the repo is or will be public — history cleanup with `git filter-repo` (explain that it rewrites history and needs a force-push and re-clones).
-4. **Prevent**: enable GitHub push protection / secret scanning, keep the Forja Secrets Guard hook on, add a `.env.example` with placeholder values.
+3. **Clean** the repo: `git rm --cached` for committed env files, `.gitignore`/`.dockerignore` entries, and — only after rotating, and only if the repo is or will be public — history cleanup with `git filter-repo` (it rewrites history: force-push and re-clones needed).
+4. **Prevent**: GitHub push protection / secret scanning, the Forja Secrets Guard hook, a `.env.example` with placeholders.
 
-Offer to save the report as `SECURITY-AUDIT.md` (make sure it only contains redacted values) and to apply the code-level fixes.
+## Step 6 — Fix (only after a yes)
 
-## Step 4 — Fix (only after a yes)
-
-Make the changes, then re-run the scanner and show the before/after counts. Remind the user that rotation in the provider dashboards is theirs to do — list each provider and key (redacted) they still need to rotate.
+Make the code-level changes, then run a new audit with the run you just finished as baseline and show what moved to "fixed". Rotation in the provider dashboards is the user's to do — list each key (redacted) still pending.

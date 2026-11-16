@@ -29,6 +29,9 @@ from rules import (  # noqa: E402
     PUBLIC_BY_DESIGN_RE, PUBLIC_ENV_PREFIXES, SENSITIVE_NAME_RE, SEVERITY_ORDER,
     is_placeholder, public_env_exposures, redact, scan_text,
 )
+from triage import (  # noqa: E402
+    EXPOSURE_LABEL, IMPACT_FROM_BASE, baseline_markdown, compare, finalize, load_baseline,
+)
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".pnpm-store", ".turbo",
              ".cache", "vendor", ".idea", ".vscode-test", "coverage", ".terraform"}
@@ -43,7 +46,6 @@ SERVER_HINT_RE = re.compile(r"(^|/)(api|server|functions|supabase/functions|back
 CLIENT_EXT = (".vue", ".svelte", ".astro")
 JS_EXT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro")
 TEST_PATH_RE = re.compile(r"(^|/)(tests?|__tests__|spec|fixtures?|__mocks__|mocks?|testdata|examples?)/|\.(test|spec)\.[jt]sx?$")
-DOWNGRADE = {"critical": "medium", "high": "low", "medium": "low", "low": "info", "info": "info"}
 AI_CONTEXT_FILES = {"CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules", ".windsurfrules", "copilot-instructions.md"}
 MCP_CONFIG_RE = re.compile(r"(^|/)(\.mcp\.json|mcp\.json|claude_desktop_config\.json|\.claude/settings(\.local)?\.json|\.cursor/mcp\.json|\.vscode/mcp\.json)$")
 PUBLIC_ENV_USE_RE = re.compile(r"\b(?:process\.env|import\.meta\.env)\.(" + "|".join(p.rstrip("_") + r"_[A-Z0-9_]+" for p in PUBLIC_ENV_PREFIXES) + r")")
@@ -68,6 +70,12 @@ class Finding:
     detail: str = ""
     fix: str = ""
     tags: list[str] = field(default_factory=list)
+    impact: str = ""          # alto | medio | bajo (secret-type findings)
+    exposure: str = ""        # publico | repo | pendiente | local | test
+    id: str = ""              # stable fingerprint across runs
+    verdict: str = "candidate"  # set by the verification step: confirmed | needs_validation | rejected
+    status: str = ""          # vs baseline: nuevo | persiste
+    previous_verdict: str = ""
 
 
 FIX = {
@@ -162,9 +170,10 @@ def scan_files(root: Path, files: list[str], tracked: set[str], git: bool) -> li
                            if "=" in ln and not ln.strip().startswith("#")
                            and (v := ln.split("=", 1)[1].strip().strip("'\"")) and not is_placeholder(v)]
             if real_values:
-                out.append(Finding("critical" if rel in tracked else "high", "env-committed",
+                out.append(Finding("critical", "env-committed",
                                    f"Archivo {name} {state}", rel,
-                                   detail=f"Contiene {len(real_values)} valores reales.", fix=FIX["env"], tags=["env"]))
+                                   detail=f"Contiene {len(real_values)} valores reales.", fix=FIX["env"], tags=["env"],
+                                   impact="alto", exposure="repo" if rel in tracked else "pendiente"))
 
         # 2) Sensitive values behind public env prefixes (end up in the browser bundle)
         if is_env or ENV_TEMPLATE_RE.search(rel):
@@ -172,7 +181,7 @@ def scan_files(root: Path, files: list[str], tracked: set[str], git: bool) -> li
                 HEAD_EVIDENCE.add(val)
                 out.append(Finding("critical", "public-env-secret", f"Secreto con prefijo público: {var}", rel, ln, val,
                                    detail="Las variables con prefijos como NEXT_PUBLIC_, VITE_ o PUBLIC_ se incrustan en el JavaScript que descarga el navegador.",
-                                   fix=FIX["client"], tags=["client"]))
+                                   fix=FIX["client"], tags=["client"], impact="alto", exposure="publico"))
 
         # 3) Code that reads a sensitive public env var
         if not is_env and rel.endswith(JS_EXT):
@@ -186,30 +195,37 @@ def scan_files(root: Path, files: list[str], tracked: set[str], git: bool) -> li
                     if SENSITIVE_NAME_RE.search(bare) and not PUBLIC_BY_DESIGN_RE.search(bare):
                         out.append(Finding("high", "public-env-usage", f"El código usa {var} (sensible y público)", rel, ln,
                                            detail="El nombre indica una credencial privada, pero el prefijo la expone al cliente.",
-                                           fix=FIX["client"], tags=["client"]))
+                                           fix=FIX["client"], tags=["client"], impact="medio", exposure="publico"))
 
         # 4) Hard-coded secrets
         for rid, rname, sev, ln, ev in scan_text(text, generic=not name.endswith((".md", ".lock")) or is_ai_ctx):
             HEAD_EVIDENCE.add(ev)
             tags, fix, detail = [], FIX["secret"], DETAIL.get(rid, "")
             if client:
-                sev, tags, fix = "critical", ["client"], FIX["client"]
+                tags, fix = ["client"], FIX["client"]
                 detail = "El archivo parece ejecutarse en el navegador, así que la clave es pública."
             if is_mcp:
-                sev, tags, fix = ("critical" if sev != "medium" else "high"), tags + ["mcp"], FIX["mcp"]
+                tags, fix = tags + ["mcp"], FIX["mcp"]
                 detail = "Configuración de servidor MCP versionada con el token en claro."
             if is_ai_ctx:
                 tags, fix = tags + ["ai-context"], FIX["ai"]
                 detail = "Credencial escrita en un archivo de contexto para asistentes de IA."
             if is_env and git:
                 continue  # already reported as a whole file
-            if TEST_PATH_RE.search(rel) and not client:
-                sev = DOWNGRADE[sev]
-                detail = (detail + " " if detail else "") + "Está en una carpeta de tests/ejemplos: revisa si es un dato de prueba falso."
-            if is_env and not git:
-                sev = "info"
+            if client:
+                exposure = "publico"
+            elif is_env and not git:
+                exposure = "local"
                 detail = "Archivo .env local (no es un repo git, no se puede saber si se publica)."
-            out.append(Finding(sev, rid, rname, rel, ln, ev, detail, fix, tags))
+            elif TEST_PATH_RE.search(rel):
+                exposure = "test"
+                detail = (detail + " " if detail else "") + "Está en una carpeta de tests/ejemplos: revisa si es un dato de prueba falso."
+            elif git and rel not in tracked:
+                exposure = "pendiente"
+            else:
+                exposure = "repo"
+            out.append(Finding(sev, rid, rname, rel, ln, ev, detail, fix, tags,
+                               impact=IMPACT_FROM_BASE[sev], exposure=exposure))
 
         # 5) Docker: secrets baked into images
         file_evidence = {f.evidence for f in out if f.file == rel}
@@ -223,7 +239,8 @@ def scan_files(root: Path, files: list[str], tracked: set[str], git: bool) -> li
                         and not is_placeholder(m.group(3)) and len(m.group(3)) >= 8:
                     out.append(Finding("high", "docker-secret", f"Secreto en {m.group(1).upper()} {m.group(2)}", rel, ln, redact(m.group(3)),
                                        detail="ENV/ARG quedan grabados en las capas de la imagen y se ven con 'docker history'.",
-                                       fix="Pásalo en tiempo de ejecución (variables del orquestador, docker secrets o --env-file) o usa BuildKit secrets (RUN --mount=type=secret)."))
+                                       fix="Pásalo en tiempo de ejecución (variables del orquestador, docker secrets o --env-file) o usa BuildKit secrets (RUN --mount=type=secret).",
+                                       impact="medio", exposure="repo" if rel in tracked or not git else "pendiente"))
                 if re.match(r"(?i)(COPY|ADD)\s+.*\.env(\s|$)", s):
                     out.append(Finding("high", "docker-copy-env", "El Dockerfile copia un .env dentro de la imagen", rel, ln,
                                        fix="No copies .env a la imagen; añade '.env*' a .dockerignore y pasa las variables en runtime."))
@@ -277,17 +294,17 @@ def scan_history(root: Path, max_commits: int) -> list[Finding]:
             seen.add(key)
             out.append(Finding(sev, f"history-{rid}", f"{rname} en el historial de git", file, None, ev,
                                detail=f"Introducido en el commit {commit}. Ya no está en el código actual, pero cualquiera con acceso al repo puede recuperarlo.",
-                               fix=FIX["history"], tags=["history"]))
+                               fix=FIX["history"], tags=["history"], impact=IMPACT_FROM_BASE[sev], exposure="repo"))
     return out
 
 
-def to_markdown(root: Path, findings: list[Finding], git: bool, history: bool) -> str:
+def to_markdown(root: Path, findings: list[Finding], git: bool, history: bool, diff: dict | None = None) -> str:
     counts = {s: sum(1 for f in findings if f.severity == s) for s in SEVERITY_ORDER}
     icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🔵", "info": "⚪"}
     lines = [f"# Forja Secrets Audit — {root.name}", "",
              f"- Repositorio git: {'sí' if git else 'no'} · Historial analizado: {'sí' if history else 'no'}",
              "- Resumen: " + " · ".join(f"{icon[s]} {s}: {n}" for s, n in counts.items() if n) if findings else "- Sin hallazgos.",
-             ""]
+             ""] + baseline_markdown(diff)
     for sev in SEVERITY_ORDER:
         group = [f for f in findings if f.severity == sev]
         if not group:
@@ -295,8 +312,11 @@ def to_markdown(root: Path, findings: list[Finding], git: bool, history: bool) -
         lines += [f"## {icon[sev]} {sev.upper()} ({len(group)})", ""]
         for f in group:
             loc = f"`{f.file}`" + (f":{f.line}" if f.line else "")
-            lines.append(f"### {f.title}")
-            lines.append(f"- **Dónde:** {loc}" + (f" · **Valor:** `{f.evidence}`" if f.evidence else ""))
+            badge = " 🆕" if f.status == "nuevo" else ""
+            lines.append(f"### {f.title}{badge}")
+            lines.append(f"- **Dónde:** {loc}" + (f" · **Valor:** `{f.evidence}`" if f.evidence else "") + f" · **ID:** `{f.id}`")
+            if f.impact and f.exposure:
+                lines.append(f"- **Impacto:** {f.impact} · **Exposición:** {EXPOSURE_LABEL[f.exposure]}")
             if f.detail:
                 lines.append(f"- **Por qué importa:** {f.detail}")
             if f.fix:
@@ -315,6 +335,9 @@ def main() -> int:
     ap.add_argument("--json", help="write JSON findings to this file")
     ap.add_argument("--no-history", action="store_true", help="skip git history scan")
     ap.add_argument("--max-commits", type=int, default=1000)
+    ap.add_argument("--repo-visibility", choices=["public", "private", "unknown"], default="unknown",
+                    help="unknown is treated as public (conservative)")
+    ap.add_argument("--baseline", help="JSON from a previous run: marks findings as new/persisting and lists what was fixed")
     args = ap.parse_args()
 
     root = Path(args.path).resolve()
@@ -335,13 +358,19 @@ def main() -> int:
 
     # dedupe + sort
     uniq = {(f.rule, f.file, f.line, f.evidence): f for f in findings}
-    findings = sorted(uniq.values(), key=lambda f: (SEVERITY_ORDER[f.severity], f.file, f.line or 0))
+    findings = finalize(list(uniq.values()), args.repo_visibility)
+    findings.sort(key=lambda f: (SEVERITY_ORDER[f.severity], f.file, f.line or 0))
+    diff = compare(findings, load_baseline(args.baseline),
+                   skip=None if history else (lambda d: str(d.get("rule", "")).startswith("history-"))) if args.baseline and Path(args.baseline).exists() else None
 
-    md = to_markdown(root, findings, git, history)
+    md = to_markdown(root, findings, git, history, diff)
     if args.md:
         Path(args.md).write_text(md, encoding="utf-8")
     if args.json:
-        Path(args.json).write_text(json.dumps([asdict(f) for f in findings], ensure_ascii=False, indent=2), encoding="utf-8")
+        meta = {"mode": "repo", "target": str(root), "git": git, "history": history,
+                "repo_visibility": args.repo_visibility, "baseline": diff}
+        Path(args.json).write_text(json.dumps({"meta": meta, "findings": [asdict(f) for f in findings]},
+                                              ensure_ascii=False, indent=2), encoding="utf-8")
     print(md)
     return 1 if any(f.severity in ("critical", "high") for f in findings) else 0
 

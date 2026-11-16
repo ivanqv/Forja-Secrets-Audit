@@ -1,6 +1,6 @@
 {
   "name": "forja-secrets-audit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Audit projects and live websites for exposed secrets (API keys in the frontend, committed .env files, tokens in MCP/CLAUDE.md, git history, reachable .env/.git) and block new leaks before Claude writes or commits them.",
   "author": {
     "name": "Iván Quintas",

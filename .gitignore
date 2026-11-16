@@ -5,5 +5,3 @@ __pycache__/
 !.env.example
 leaky-app/
 SECURITY-AUDIT.md
-*:mshield
-*:Zone.Identifier
